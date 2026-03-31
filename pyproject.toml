@@ -1,14 +1,31 @@
 [project]
 name = "nanomoe"
 version = "0.1.0"
-description = "Small Transformer where the Feed-Forward Network (FFN) is replaced by a Router and 4 tiny "Expert" networks."
+description = "Small Transformer where the Feed-Forward Network (FFN) is replaced by a Router and 4 tiny Expert networks."
 readme = "README.md"
 authors = [
-    { name = "Sevan Kelpentidjian", email = "s.kelpet@gmail.com" }
+    { name = "Sevan Kelpentidjian", email = "" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "ipykernel>=7.2.0",
+    "lightning>=2.6.1",
+    "matplotlib>=3.10.8",
+    "numpy>=2.4.2",
+    "pydantic>=2.12.5",
+    "pytest>=9.0.2",
+    "seaborn>=0.13.2",
+    "tiktoken>=0.12.0",
+    "tokenizers>=0.22.2",
+    "torch>=2.10.0",
+    "wandb>=0.25.1",
+]
 
 [build-system]
 requires = ["uv_build>=0.9.18,<0.10.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "asitop>=0.0.24",
+]

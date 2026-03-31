@@ -1,0 +1,7 @@
+#vocab_size: 50257
+vocab_size: 8000
+n_embed: 256
+n_heads: 4
+n_layers: 5
+attention: "flash"
+block_size: 32

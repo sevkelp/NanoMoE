@@ -207,4 +207,8 @@ marimo/_lsp/
 __marimo__/
 
 # Custom
+notebooks
 README_LEARN.md
+toy_data.txt
+train.bin
+val.bin
