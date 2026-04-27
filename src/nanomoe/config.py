@@ -9,8 +9,23 @@ class BaseConfig:
         with open(path, "r") as f:
             data = yaml.safe_load(f)
         return cls(**data)
+
+    @classmethod
     def from_dict(cls, data: dict) -> "BaseConfig": # Should not be needed
         return cls(**data)
+
+    def to_json(self, indent: int = 4) -> str:
+        # Pydantic v2 method to get a JSON string
+        return self.model_dump_json(indent=indent)
+
+    def save_pretrained(self, save_directory: str | Path):
+        """Saves the config to a directory as config.json"""
+        save_path = Path(save_directory)
+        save_path.mkdir(parents=True, exist_ok=True)
+
+        with open(save_path / "config.json", "w") as f:
+            f.write(self.to_json())
+
 
 
 class GPTConfig(BaseModel, BaseConfig):
@@ -24,6 +39,7 @@ class GPTConfig(BaseModel, BaseConfig):
     n_layers: int = Field(..., gt=0, description="Number of layers of attention heads")
     attention: str = Field(default="standard", desription="Flash or standard")
     block_size: int = Field(..., gt=0, description="Context size")
+    #dropout: float = Field(..., gt=0, description="Dropout probability")
 
 class TrainerConfig(BaseModel, BaseConfig):
     lr: float = Field(default=1e-3, ge=0, description="Learning rate")

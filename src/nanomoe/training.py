@@ -60,37 +60,26 @@ class LightningGPT(L.LightningModule):
         """Register hooks. This runs once before training starts."""
         # You can target any layer inside your model by its name
         self.model.embed.register_forward_hook(self.get_activation_tensors("embedding", renaming="0_embedding"))
-        for i,block in enumerate(self.model.blocks):
-            block.att.register_forward_hook(self.get_activation_tensors("attention", renaming=f"1_attention_{i}"))
-            block.mlp.register_forward_hook(self.get_activation_tensors("mlp", renaming=f"2_mlp_{i}"))
+        self.model.blocks[0].att.register_forward_hook(self.get_activation_tensors("attention", renaming=f"1_attention_0"))
+        self.model.blocks[0].mlp.register_forward_hook(self.get_activation_tensors("mlp", renaming=f"2_mlp_0"))
+        self.model.blocks[-1].att.register_forward_hook(self.get_activation_tensors("attention", renaming=f"1_attention_0"))
+        self.model.blocks[-1].mlp.register_forward_hook(self.get_activation_tensors("mlp", renaming=f"2_mlp_4"))
+        # for i,block in enumerate(self.model.blocks):
+        #     block.att.register_forward_hook(self.get_activation_tensors("attention", renaming=f"1_attention_{i}"))
+        #     block.mlp.register_forward_hook(self.get_activation_tensors("mlp", renaming=f"2_mlp_{i}"))
+        self.model.classif.register_forward_hook(self.get_activation_tensors("classif", renaming="3_classif"))
 
     def _forward(self, batch):
         x,y = batch
         out = self.model(x)
         B,T,C = out.shape
-        loss = F.cross_entropy(out.view(B,C,T),y)
+        #loss = F.cross_entropy(out.view(B,C,T),y)#,label_smoothing = 0.5)
+        loss = F.cross_entropy(out.view(B*T,C),y.view(B*T))#,label_smoothing = 0.5)
         return loss
 
     def training_step(self, batch, batch_idx):
         loss = self._forward(batch=batch)
         self.log("loss/train_loss", loss)
-
-        # Log weights
-        embed_norm = self.model.embed.weight.norm(2)
-        self.log(f"weights/embed", embed_norm)
-        mlp_norm = self.model.blocks[-1].mlp.o_proj.weight.norm(2)
-        self.log(f"weights/mlp", mlp_norm)
-
-        # Log activations
-        for key,tensor in self.activation_tensors.items():
-            self.log(f"activations/{key}_std", tensor.std())
-
-        # if True:#self.global_step % 50 == 0:
-            hist_data = {}
-            for key,tensor in self.activation_tensors.items():
-                hist_data[f"activations/{key}"] = wandb.Histogram(tensor.cpu())
-            self.logger.experiment.log(hist_data)
-
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -99,23 +88,38 @@ class LightningGPT(L.LightningModule):
         return loss
 
     def test_step(self, batch, batch_idx):
+        # 1. Before forward pass, check if weights changed since last training_step
+        if hasattr(self, "_last_weights"):
+            # We check the first parameter (usually embedding or first layer)
+            current_w = next(self.model.parameters()).detach()
+            diff = torch.abs(current_w - self._last_weights).sum()
+
+            # This should be 0 for batches 1-15 of the accumulation cycle
+            if diff > 0:
+                print(f"DEBUG: Weights UPDATED at batch_idx {batch_idx}")
+            else:
+                print(f"DEBUG: Weights STATIC at batch_idx {batch_idx}")
+
         loss = self._forward(batch=batch)
         self.log("loss/test_loss", loss)
+
+        # 2. Store current weights for the next batch comparison
+        self._last_weights = next(self.model.parameters()).detach().clone()
         return loss
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay = 0.1)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay = 0.01)
 
         #total_steps = self.trainer.estimated_stepping_batches
-        total_steps = 100000
+        total_steps = 27840
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
-            max_lr=1e-3,
+            max_lr=self.scheduler_max_lr,
             total_steps=total_steps,
-            pct_start=0.01,    # 10% Warmup
+            pct_start=0.1,    # 10% Warmup
             anneal_strategy='cos',
-            div_factor=5,    # Start at max_lr / 25
-            final_div_factor=1e4 # End at max_lr / 10000
+            div_factor=10,    # Start at max_lr / 25
+            final_div_factor=100 # End at max_lr / 10000
         )
         return {
                 "optimizer": optimizer,
@@ -126,8 +130,8 @@ class LightningGPT(L.LightningModule):
             }
 
     def on_before_optimizer_step(self, optimizer):
-        # if self.global_step % 50 != 0:
-        #     return
+        if self.global_step % 50 != 0:
+            return
         # 1. Collect all norms
         norms = [p.grad.detach().norm(2) for p in self.parameters() if p.grad is not None]
         total_norm = torch.norm(torch.stack(norms), 2)
@@ -136,18 +140,50 @@ class LightningGPT(L.LightningModule):
         # We check how much the weights *would* change
         lr = self.trainer.optimizers[0].param_groups[0]['lr']
         ratios = []
+        detailed_ratios_names = ["embed.we", "pos_embe", "blocks.0", "blocks.4"]
+        detailed_ratios = {n : [] for n in detailed_ratios_names}
+        detailed_grads = {n : [] for n in detailed_ratios_names}
         for name, p in self.named_parameters():
             if p.grad is not None and "weight" in name:
+                grad_norm = p.grad.detach().norm(2)
                 update_norm = p.grad.detach().norm(2) * lr
                 weight_norm = p.detach().norm(2)
                 ratios.append(update_norm / (weight_norm + 1e-8))
+                #self.log(f"grad/update_weight_rato_{name}", update_norm/(weight_norm + 1e-8))
+                if name[6:14] in detailed_ratios_names:
+                    detailed_grads[name[6:14]].append(grad_norm)
+                    detailed_ratios[name[6:14]].append(update_norm / (weight_norm + 1e-8))
 
         avg_ratio = torch.mean(torch.stack(ratios))
 
         # 3. Log everything
         self.log("grad/total_norm", total_norm)
         self.log("grad/update_weight_ratio", avg_ratio)
+        for k,v in detailed_ratios.items():
+            self.log(f"grad/update_weight_ratio_{k}", torch.mean(torch.stack(v)))
+        for k,v in detailed_grads.items():
+            self.log(f"grad/norm_{k}", torch.mean(torch.stack(v)))
         self.log("optimizer/lr", lr)
+
+    def on_train_batch_end(self, *args, **kwargs):
+
+        # Log weights
+        embed_norm = self.model.embed.weight.norm(2)
+        self.log(f"weights/embed", embed_norm)
+        mlp_norm = self.model.blocks[-1].mlp.o_proj.weight.norm(2)
+        self.log(f"weights/mlp", mlp_norm)
+
+        # Log activations
+        for key,tensor in self.activation_tensors.items():
+            self.log(f"activations/{key}_std", tensor.std())
+            if key == "3_classif":
+                self.log(f"activations/{key}_max", tensor.max())
+
+        if self.global_step % 50 == 0:
+            hist_data = {}
+            for key,tensor in self.activation_tensors.items():
+                hist_data[f"activations/{key}"] = wandb.Histogram(tensor.cpu())
+            self.logger.experiment.log(hist_data)
 
     @classmethod
     def from_config(cls, model_config: config.GPTConfig, trainer_config: config.TrainerConfig, ):
