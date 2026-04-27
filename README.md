@@ -7,7 +7,7 @@ We ended up not using the custom tokenizer (below are examples to run it).
 - Train tokenizer : `src/nanomoe/tokenizer/train.py --model_config configs/gpt.yaml --train_data data/toy_data.txt --save_to notebooks/tokenizer.json`
 - Infer tokenizer : `src/nanomoe/tokenizer/infer.py --tokenizer notebooks/tokenizer.json --data data/toy_data.txt --save_to data/custom`
 ## Training
-`train-m1-gpt2`
+`make train-m1-gpt2`
 ## Inference
 ```python
 from nanomoe.model import GPT
@@ -26,6 +26,7 @@ print(output)
 - Perplexity : 30
 
 # Project structure
+```
 ├── configs/           # YAML configuration files for models and training
 ├── nanomoe/
 │   ├── model.py       # GPT, Transformer Block, and Attention logic
@@ -34,6 +35,7 @@ print(output)
 │   └── data/          # Data loading and tokenization utilities
 ├── scripts/           # Training and inference entry points
 └── Makefile           # Shortcuts for common commands
+```
 
 # TODO
 Update model architecture and replace MLP with MoE.
