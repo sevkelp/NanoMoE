@@ -212,3 +212,5 @@ README_LEARN.md
 toy_data.txt
 train.bin
 val.bin
+checkpoints
+notebooks

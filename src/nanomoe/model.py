@@ -1,4 +1,7 @@
+import os
 import math
+import json
+from pathlib import Path
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -51,6 +54,8 @@ class AttentionHead(nn.Module):
             attention = q @ k.transpose(-2,-1) * math.sqrt(1.0/k.size(-1)) # B,T,T
             attention = attention.masked_fill(self.mask, float('-inf')) # most likely self.mask[:,:T,:T]
             attention = F.softmax(attention, dim=-1)
+            dropout = nn.Dropout(p=0.2)
+            attention = dropout(attention)
             y = attention @ v # B,T,T @ B,T,n_embed -> B,T,n_embed
 
         return y
@@ -64,6 +69,7 @@ class MultiHeadAttention(nn.Module):
         self.n_heads = n_heads
         self.head_dim = n_embed // n_heads
         self.attention = attention
+        self.dropout = nn.Dropout(p=0.2)
 
         # Combined QKV projection for efficiency
         self.qkv_proj = nn.Linear(n_embed, 3 * n_embed)
@@ -99,13 +105,14 @@ class MultiHeadAttention(nn.Module):
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
             att = att.masked_fill(self.mask[:T, :T], float('-inf'))
             att = F.softmax(att, dim=-1)
+            att = self.dropout(att)
             y = att @ v # (B, n_heads, T, head_dim)
 
         # 4. Concatenate heads back together: (B, T, n_embed)
         y = y.transpose(1, 2).contiguous().view(B, T, C)
 
         # 5. Final projection (mixing the independent head information)
-        return self.o_proj(y)
+        return self.dropout(self.o_proj(y))
 
 class MLP(nn.Module):
     def __init__(self, n_embed):
@@ -114,11 +121,14 @@ class MLP(nn.Module):
         self.op1 = nn.Linear(self.n_embed, 4 * self.n_embed)
         self.o_proj = nn.Linear(4 * self.n_embed, self.n_embed)
         self.gelu = nn.GELU()
+        self.dropout = nn.Dropout(p=0.2)
 
     def forward(self, x):
         x = self.op1(x)
         x = self.gelu(x)
-        return self.o_proj(x)
+        x = self.o_proj(x)
+        x = self.dropout(x)
+        return x
 
 class Transformer(nn.Module):
     def __init__(self, n_embed, n_heads, attention = "flash", block_size = None):
@@ -139,12 +149,6 @@ class Transformer(nn.Module):
         self.rms2 = nn.RMSNorm([self.n_embed])
 
     def forward(self, x):
-        device = x.device
-        # Positional embedding
-        # B, T, C = x.shape
-        # pos = torch.arange(0, T, dtype=torch.long, device=device) # Match length T
-        # x = x + self.pos_embed(pos).unsqueeze(0)
-        # Forward
         x = x + self.att(self.rms1(x))
         x = x + self.mlp(self.rms2(x))
         return x
@@ -170,6 +174,7 @@ class GPT(nn.Module):
         self.block_size = block_size
         self.embed = torch.nn.Embedding(vocab_size, n_embed)
         self.pos_embed = nn.Embedding(block_size, n_embed)
+        self.rms = nn.RMSNorm([self.n_embed])
         # Stacking the blocks
         self.blocks = nn.ModuleList([
             Transformer(
@@ -213,7 +218,7 @@ class GPT(nn.Module):
         # Blocks
         for block in self.blocks:
             x = block(x)
-        x = self.classif(x)
+        x = self.classif(self.rms(x))
         return x
 
     def get_num_param(self):
@@ -221,3 +226,22 @@ class GPT(nn.Module):
         for _, p in self.named_parameters():
             param_num += p.numel()
         return param_num
+
+    @classmethod
+    def from_pretrained(cls, folder_path: str | Path):
+        folder_path = Path(folder_path)
+
+        # 1. Load the Config
+        from nanomoe.config import GPTConfig
+        with open(os.path.join(folder_path, "config.json"),"r") as f:
+            config_data = json.load(f)
+        config = GPTConfig.from_dict(config_data)
+
+        # 2. Re-initialize the model architecture
+        model = cls(**config.model_dump())
+
+        # 3. Load the weights
+        state_dict = torch.load(folder_path / "model_weights.pt", map_location="cpu", weights_only=True)
+        model.load_state_dict(state_dict)
+
+        return model, config

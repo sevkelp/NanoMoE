@@ -1,10 +1,10 @@
 trainer:
-  lr: 1e-3
-  max_epochs: 60
-  scheduler_max_lr: 1e-4
-  scheduler_steps_per_epochs: 10
+  lr: 1e-5
+  max_epochs: 10 #60
+  scheduler_max_lr: 5e-4
+  scheduler_steps_per_epochs: 100
 loader:
-  batch_size: 128
+  batch_size: 64
   shuffle: True
   pin_memory: False
   num_workers: 0
